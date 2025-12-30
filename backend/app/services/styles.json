@@ -1,0 +1,60 @@
+{
+    "styles": {
+        "hype": {
+            "description": "Fast-paced, energetic, quick cuts, high saturation.",
+            "pacing": 0.5,
+            "system_instruction": "Use short clips (0.5s - 1.5s). Sync cuts to beat. Use 'flash' transitions.",
+            "examples": [
+                {
+                    "user_request": "Make a hype intro for my gaming channel",
+                    "edl_snippet": [
+                        {
+                            "start": 10.0,
+                            "end": 10.5,
+                            "effect": "zoom_in"
+                        },
+                        {
+                            "start": 15.2,
+                            "end": 15.8,
+                            "transition": "flash"
+                        },
+                        {
+                            "start": 20.0,
+                            "end": 20.4,
+                            "modification": "speed_up"
+                        }
+                    ]
+                }
+            ]
+        },
+        "cinematic": {
+            "description": "Slow, emotional, wide shots, letterbox, color graded.",
+            "pacing": 4.0,
+            "system_instruction": "Use long takes (3s - 6s). Focus on stable shots. Use cross-dissolves.",
+            "examples": [
+                {
+                    "user_request": "A cinematic travel vlog intro",
+                    "edl_snippet": [
+                        {
+                            "start": 0.0,
+                            "end": 5.0,
+                            "transition": "fade_in",
+                            "filter": "letterbox"
+                        },
+                        {
+                            "start": 12.0,
+                            "end": 16.0,
+                            "transition": "cross_dissolve"
+                        }
+                    ]
+                }
+            ]
+        },
+        "vlog": {
+            "description": "Natural, jump cuts for silence, engaging.",
+            "pacing": 2.0,
+            "system_instruction": "Keep the talking head parts. Cut out silence. Standard cuts.",
+            "examples": []
+        }
+    }
+}

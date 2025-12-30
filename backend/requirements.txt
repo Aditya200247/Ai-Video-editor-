@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+python-multipart
+moviepy
+librosa
+opencv-python
+numpy
+torch
+transformers
+ftfy
+regex
+scenedetect
