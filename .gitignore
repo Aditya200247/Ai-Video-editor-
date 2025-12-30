@@ -31,3 +31,4 @@ logs/
 # Project specific
 output_videos/
 temp/
+backend/uploads/

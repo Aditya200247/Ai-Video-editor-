@@ -1,41 +1,60 @@
+import os
+import unittest
+from unittest.mock import MagicMock, patch
 from backend.app.services.director import Director
 
-def test_director_logic():
-    d = Director()
-    
-    # Test 1: Vibe Detection
-    print("Testing Vibe Detection...")
-    prompts = {
-        "Make a fast hype reel for gaming": "hype",
-        "Create a slow emotional movie scene": "cinematic",
-        "Just a daily vlog edit": "vlog"
-    }
-    
-    for p, expected in prompts.items():
-        vibe = d._analyze_vibe(p)
-        print(f"Prompt: '{p}' -> Vibe: {vibe} (Expected: {expected})")
-        assert vibe == expected
+class TestDirector(unittest.TestCase):
+    def setUp(self):
+        # Ensure no API key interferes with default tests
+        if "GEMINI_API_KEY" in os.environ:
+            del os.environ["GEMINI_API_KEY"]
+            
+    def test_vibe_detection(self):
+        d = Director()
+        print("\nTesting Vibe Detection...")
+        prompts = {
+            "Make a fast hype reel for gaming": "hype",
+            "Create a slow emotional movie scene": "cinematic",
+            "Just a daily vlog edit": "vlog"
+        }
+        for p, expected in prompts.items():
+            vibe = d._analyze_vibe(p)
+            print(f"Prompt: '{p}' -> Vibe: {vibe}")
+            self.assertEqual(vibe, expected)
+
+    def test_heuristic_fallback(self):
+        """Test the logic when no API key is present"""
+        print("\nTesting Heuristic Fallback...")
+        d = Director()
+        assets = [{"file_id": "1", "path": "vid.mp4", "metadata": {"duration": 10.0}, "type": "video"}]
         
-    # Test 2: EDL Generation (Mock Assets)
-    print("\nTesting EDL Generation...")
-    assets = [{
-        "file_id": "test_1",
-        "path": "test.mp4",
-        "metadata": {"duration": 10.0}
-    }]
-    
-    # Test Hype
-    edl_hype = d.generate_edit_script("make it hype", assets)
-    # Expect multiple cuts or speed up
-    print("Hype EDL explanation:", edl_hype['explanation'])
-    assert "hype" in edl_hype['explanation']
-    
-    # Test Cinematic
-    edl_cine = d.generate_edit_script("make it cinematic", assets)
-    print("Cinematic EDL explanation:", edl_cine['explanation'])
-    assert "cinematic" in edl_cine['explanation']
-    
-    print("\nALL TESTS PASSED")
+        # Test Hype
+        edl = d.generate_edit_script("make it hype", assets)
+        self.assertIn("Heuristic fallback", edl['explanation'])
+        self.assertIn("hype", edl['explanation'])
+        
+    @patch('google.generativeai.GenerativeModel')
+    @patch('google.generativeai.configure')
+    def test_llm_generation(self, mock_config, mock_model_class):
+        """Test the LLM path by mocking the API"""
+        print("\nTesting LLM Path (Mocked)...")
+        
+        # Setup Mock
+        mock_instance = mock_model_class.return_value
+        mock_response = MagicMock()
+        mock_response.text = '```json\n{"timeline": [], "explanation": "AI Generated"}\n```'
+        mock_instance.generate_content.return_value = mock_response
+        
+        # Inject Fake Key
+        with patch.dict(os.environ, {"GEMINI_API_KEY": "fake_key"}):
+            d = Director() # Should initialize model now
+            
+            assets = [{"file_id": "1", "path": "vid.mp4", "metadata": {"duration": 10.0}, "type": "video"}]
+            edl = d.generate_edit_script("make it cinematic", assets)
+            
+            print("LLM EDL Explanation:", edl['explanation'])
+            self.assertEqual(edl['explanation'], "AI Generated")
+            mock_instance.generate_content.assert_called_once()
 
 if __name__ == "__main__":
-    test_director_logic()
+    unittest.main()

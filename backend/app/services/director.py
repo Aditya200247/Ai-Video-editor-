@@ -1,152 +1,176 @@
 import json
 import os
+import google.generativeai as genai
 
 class Director:
     def __init__(self):
-        # In a real app, initialize Gemini or OpenAI client here
-        # self.client = genai.GenerativeModel('gemini-pro')
+        self.api_key = os.getenv("GEMINI_API_KEY")
+        self.model = None
+        
+        if self.api_key:
+            try:
+                genai.configure(api_key=self.api_key)
+                self.model = genai.GenerativeModel('gemini-pro')
+                print("✅ AI Director initialized with Gemini Pro")
+            except Exception as e:
+                print(f"⚠️ Failed to initialize Gemini: {e}")
+        else:
+            print("⚠️ No GEMINI_API_KEY found. using fallback logic.")
+            
         self.styles = self._load_styles()
 
     def _load_styles(self):
         try:
-            with open("backend/app/services/styles.json", "r") as f:
+            with open("app/services/styles.json", "r") as f:
                 return json.load(f)
-        except:
+        except FileNotFoundError:
+            # Try absolute path if relative fails (for testing)
+            try:
+                with open("backend/app/services/styles.json", "r") as f:
+                    return json.load(f)
+            except:
+                return {}
+        except Exception:
             return {}
 
     def _analyze_vibe(self, prompt: str) -> str:
-        """
-        Simple keyword matching to guess the vibe.
-        In a real LLM app, this would be a separate prompt.
-        """
         prompt = prompt.lower()
-        if any(w in prompt for w in ['fast', 'hype', 'quick', 'energetic', 'gaming']):
+        if any(w in prompt for w in ['fast', 'hype', 'quick', 'energetic', 'gaming', 'montage']):
             return 'hype'
-        if any(w in prompt for w in ['slow', 'cinematic', 'movie', 'film', 'sad', 'emotional']):
+        if any(w in prompt for w in ['slow', 'cinematic', 'movie', 'film', 'sad', 'emotional', 'drama']):
             return 'cinematic'
-        return 'vlog' # Default
+        return 'vlog'
 
     def generate_edit_script(self, user_prompt: str, assets_metadata: list, reference_style: dict = None) -> dict:
         """
-        The 'Brain'. Takes user intent and assets, returns an Edit Decision List (EDL).
+        Takes user intent and assets, returns an Edit Decision List (EDL).
+        Uses Gemini LLM if available, otherwise falls back to vibe-based heuristics.
         """
-        
-        # 1. Determine Vibe / Style
         detected_vibe = self._analyze_vibe(user_prompt)
-        style_config = self.styles.get("styles", {}).get(detected_vibe, {})
+        print(f"🎬 Director detected vibe: {detected_vibe}")
+
+        if self.model:
+            try:
+                return self._generate_with_llm(user_prompt, assets_metadata, detected_vibe, reference_style)
+            except Exception as e:
+                print(f"❌ LLM Generation failed: {e}. Falling back to heuristic.")
+                
+        return self._generate_heuristic(user_prompt, assets_metadata, detected_vibe)
+
+    def _generate_with_llm(self, user_prompt: str, assets: list, vibe: str, style_ref: dict) -> dict:
+        """Generate EDL using Gemini Pro"""
         
-        print(f"Director detected vibe: {detected_vibe}")
+        style_config = self.styles.get("styles", {}).get(vibe, {})
         
-        # 2. Construct the System Prompt with Few-Shot Examples (Training)
+        # Simplify assets for the prompt to save tokens/complexity
+        simplified_assets = []
+        for a in assets:
+            simplified_assets.append({
+                "id": a['file_id'],
+                "type": a['type'], # video/image
+                "duration": f"{a['metadata'].get('duration', 0):.1f}s",
+                "filename": os.path.basename(a['path'])
+            })
+
         system_prompt = f"""
-        You are a professional video editor specializing in {detected_vibe} style.
-        Style Description: {style_config.get('description', 'Standard video editing')}
-        Instructions: {style_config.get('system_instruction', 'Create a balanced video.')}
+        Act as a professional Video Editor Director. Your goal is to create an engaging video edit based on the user's request and the available assets.
         
-        Your job is to take a set of video clips and a user request and create a JSON Edit Decision List (EDL).
+        **Style:** {vibe.upper()}
+        **Description:** {style_config.get('description', 'Standard edit')}
+        **System Instructions:** {style_config.get('system_instruction', 'Create a balanced video.')}
         
-        The Output must strictly follow this JSON schema:
+        **Available Assets:**
+        {json.dumps(simplified_assets, indent=2)}
+        
+        **User Request:** "{user_prompt}"
+        
+        **Task:**
+        Create a JSON Edit Decision List (EDL) that selects the best parts of the clips.
+        - For 'hype', use short, fast cuts (2-4s).
+        - For 'cinematic', use longer, steady shots (5-8s).
+        - Ensure the total duration matches the amount of content provided (don't make it too short if there are many clips).
+        - You CAN re-use clips if it fits the style (like a montage).
+        
+        **Output Format (Strict JSON):**
         {{
             "timeline": [
                 {{
-                    "clip_id": "string",
-                    "start": float,
-                    "end": float,
-                    "description": "string",
-                    "transition": "cut" | "fade_in" | "fade_out",
-                    "speed": float,
-                    "saturation": float,
-                    "filter": "black_white"
+                    "clip_id": "string (must match Asset ID)",
+                    "start": float (start time in seconds),
+                    "end": float (end time in seconds),
+                    "description": "reason for selection",
+                    "transition": "cut" | "cross_dissolve" | "fade_in" | "fade_out",
+                    "speed": float (1.0 is normal),
+                    "filter": "none" | "black_white" | "vibrant"
                 }}
             ],
-            "audio_track": "string (optional)",
-            "explanation": "string"
+            "explanation": "Brief explanation of your creative choices."
         }}
         """
         
-        # Inject Examples
-        examples = style_config.get('examples', [])
-        if examples:
-            system_prompt += "\n\nEXAMPLES OF GOOD EDITS:\n"
-            for ex in examples:
-                system_prompt += f"User: {ex['user_request']}\nEDL Snippet: {json.dumps(ex['edl_snippet'])}\n\n"
+        response = self.model.generate_content(system_prompt)
+        cleaned_json = self._clean_json_response(response.text)
+        return cleaned_json
 
-        # 3. Construct User Context
-        context = {
-            "user_request": user_prompt,
-            "assets_summary": [
-                 f"ID: {a['file_id']}, Dur: {a['metadata'].get('duration',0)}s" for a in assets_metadata
-            ],
-            "assets": assets_metadata, # Full metadata provided to logic
-            "reference_style": reference_style
-        }
-        
-        # 4. Call LLM (Mocked for now with smarter heuristics based on vibe)
-        print(f"Director received prompt: {user_prompt}")
-        
-        # --- MOCK INTELLIGENCE ---
-        # Instead of random 2s clips, we adjust based on Vibe
-        
+    def _clean_json_response(self, text: str) -> dict:
+        """Extracts JSON from markdown code blocks if necessary"""
+        try:
+            if "```json" in text:
+                text = text.split("```json")[1].split("```")[0]
+            elif "```" in text:
+                text = text.split("```")[1].split("```")[0]
+            return json.loads(text.strip())
+        except Exception as e:
+            raise ValueError(f"Failed to parse LLM JSON: {e}")
+
+    def _generate_heuristic(self, user_prompt: str, assets: list, vibe: str) -> dict:
+        """Fallback logic if LLM is unavailable"""
+        style_config = self.styles.get("styles", {}).get(vibe, {})
         target_clip_len = style_config.get('pacing', 3.0)
         timeline = []
         
-        for asset in assets_metadata:
+        print(f"⚠️ Using Heuristic Director for {vibe} style")
+        
+        for asset in assets:
             duration = asset.get('metadata', {}).get('duration', 10)
             
-            # Divide clip into chunks based on pacing
-            current_pos = 0.0
-            
-            # For HYPE, we might take multiple fast cuts from same clip
-            # For CINEMATIC, we take one long stable shot
-            
-            if detected_vibe == 'hype':
-                # Take 2-3 short bursts
-                num_cuts = 2
-                for i in range(num_cuts):
-                    if current_pos + target_clip_len > duration: break
-                    
+            if vibe == 'hype':
+                # Hype: Fast cuts
+                if duration > target_clip_len:
                     timeline.append({
                         "clip_id": asset['file_id'],
                         "source_path": asset['path'],
-                        "start": current_pos,
-                        "end": current_pos + target_clip_len,
-                        "description": f"Hype cut {i+1}",
-                        "effect": "zoom_in" if i % 2 == 0 else "cut",
-                        "speed": 1.5 # Fast!
+                        "start": 0,
+                        "end": target_clip_len,
+                        "description": "Fast opener",
+                        "speed": 1.2,
+                        "transition": "cut"
                     })
-                    current_pos += (target_clip_len + 2.0) # Skip ahead
-            
-            elif detected_vibe == 'cinematic':
-                # Take one long middle section
+            elif vibe == 'cinematic':
+                # Cinematic: Slow middle cut
                 mid = duration / 2
-                half_len = target_clip_len / 2
-                start = max(0, mid - half_len)
-                end = min(duration, mid + half_len)
-                
+                half = target_clip_len / 2
                 timeline.append({
                     "clip_id": asset['file_id'],
                     "source_path": asset['path'],
-                    "start": start,
-                    "end": end,
-                    "description": "Cinematic stable shot",
-                    "saturation": 1.2, # Good color
+                    "start": max(0, mid - half),
+                    "end": min(duration, mid + half),
+                    "description": "Cinematic center frame",
+                    "filter": "vibrant",
                     "transition": "cross_dissolve"
                 })
-                
             else:
-                # Default logic
-                start = 0
-                end = min(duration, target_clip_len)
+                # Standard
                 timeline.append({
                     "clip_id": asset['file_id'],
                     "source_path": asset['path'],
-                    "start": start,
-                    "end": end,
-                    "description": "Standard cut",
-                    "effect": "cut"
+                    "start": 0,
+                    "end": min(duration, target_clip_len),
+                    "description": "Standard selection",
+                    "transition": "cut"
                 })
-            
+                
         return {
             "timeline": timeline,
-            "explanation": f"Generated a {detected_vibe} edit based on your request and provided examples."
+            "explanation": f"Heuristic fallback: Generated {vibe} edit."
         }

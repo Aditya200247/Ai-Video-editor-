@@ -10,3 +10,4 @@ transformers
 ftfy
 regex
 scenedetect
+google-generativeai
